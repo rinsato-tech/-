@@ -3,6 +3,7 @@ import pandas as pd
 import re
 import traceback
 import io
+from openpyxl.styles import PatternFill  # ★色を塗るためのパーツを追加
 
 st.set_page_config(page_title="仕訳フォーマット自動変換", layout="wide")
 st.title("📄 楽楽請求 仕訳フォーマット自動変換ツール")
@@ -84,7 +85,6 @@ if uploaded_file is not None:
             t_code = clean_code(first_row[col_torihikisaki_code]) if col_torihikisaki_code else ""
             t_name = str(first_row[col_torihikisaki_name]).replace('nan', '不明').strip() if col_torihikisaki_name else "不明"
             
-            # 仕訳日（月末判定）の処理
             is_month_end = True
             if col_date:
                 dates = pd.to_datetime(group[col_date], errors='coerce')
@@ -160,7 +160,6 @@ if uploaded_file is not None:
             
             date_val = "請求日の当月月末" if p['is_month_end'] else "請求日の当日"
             
-            # 複数行（複合仕訳）の場合は、列を増やすのではなく「3行セット」を縦に繰り返し追加する
             for line in p['lines']:
                 row_1 = {
                     '仕訳パターンコード': pattern_code, '仕訳パターン名': p['name'], '取引先': p['t_code'], 'プロジェクト': '', '部門': '', '仕訳日': date_val,
@@ -172,7 +171,6 @@ if uploaded_file is not None:
                 row_2 = row_1.copy()
                 row_3 = row_1.copy()
                 
-                # row_2, row_3 を空にする
                 for k in row_2.keys():
                     row_2[k] = ""
                     row_3[k] = ""
@@ -183,7 +181,6 @@ if uploaded_file is not None:
                 row_3['仕訳パターンコード'] = '金額の設定方法'
                 row_3['プロジェクト'] = '金額を直接入力する'
                 
-                # プロジェクトはD列ではなく明細行のプロジェクト列に配置
                 row_1['借方_勘定科目_1'] = line['kari_kamoku']
                 row_1['借方_補助科目_1'] = line['kari_hojo']
                 row_1['借方_税区分_1'] = line['kari_tax']
@@ -198,7 +195,6 @@ if uploaded_file is not None:
                 
                 row_1['共通_摘要_1'] = line['tekiyo']
                 
-                # 借方・貸方の金額設定
                 if len(p['lines']) == 1:
                     row_1['借方_金額_1'] = "差額を自動入力"
                     row_1['貸方_金額_1'] = "差額を自動入力"
@@ -215,6 +211,21 @@ if uploaded_file is not None:
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             final_df.to_excel(writer, index=False)
+            
+            # ★ ここから下で、3行ごとに交互に色を塗っています！
+            worksheet = writer.sheets['Sheet1']
+            # 薄いグレーの背景色を用意
+            gray_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
+            
+            # データの行（2行目）から最後までループ
+            # (row_idx - 2) // 3 の計算で、0,0,0, 1,1,1, 2,2,2... というブロック番号を作ります
+            for row_idx in range(2, len(final_df) + 2):
+                block_idx = (row_idx - 2) // 3
+                # ブロック番号が奇数（1, 3, 5...）のときだけ色を塗る（＝交互になる）
+                if block_idx % 2 != 0:
+                    for col_idx in range(1, len(final_df.columns) + 1):
+                        worksheet.cell(row=row_idx, column=col_idx).fill = gray_fill
+
         output.seek(0)
         
         st.success("✅ 変換が完了しました！下のボタンからダウンロードしてください。")
