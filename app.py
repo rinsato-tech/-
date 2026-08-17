@@ -3,7 +3,8 @@ import pandas as pd
 import re
 import traceback
 import io
-from openpyxl.styles import PatternFill, Border, Side
+# ★追加：文字の色や太さを変える「Font」を読み込みます
+from openpyxl.styles import PatternFill, Border, Side, Font
 
 st.set_page_config(page_title="仕訳フォーマット自動変換", layout="wide")
 st.title("📄 楽楽請求 仕訳フォーマット自動変換ツール")
@@ -30,10 +31,10 @@ if uploaded_file is not None:
         st.stop()
 
     def find_col(keywords):
-        # ★修正：キーワードごとに「完全一致→部分一致」を探し、見つかれば即決定する（優先度順）
         for k in keywords:
             for col in df.columns:
                 if k == str(col): return col
+        for k in keywords:
             for col in df.columns:
                 if k in str(col): return col
         return None
@@ -45,7 +46,7 @@ if uploaded_file is not None:
         if v == 'nan': return ""
         return v
 
-    col_date = find_col(['仕訳日', '伝票日付', '日付']) # 優先度を調整
+    col_date = find_col(['仕訳日', '伝票日付', '日付'])
     col_denpyo = find_col(['伝票', '伝番', 'No', '番号'])
     col_kari_money = find_col(['本体金額', '借方金額／貸方金額', '借方金額', '借金額', '金額(借)', '金額'])
     col_tekiyo = find_col(['元帳摘要', '摘要', '詳細', 'メモ'])
@@ -87,7 +88,6 @@ if uploaded_file is not None:
         
         for denpyo, group in grouped:
             
-            # ★修正：1行目だけでなく、グループ内の「空欄ではないデータ」を優先して取得する
             t_code_valid = group[col_torihikisaki_code].dropna() if col_torihikisaki_code else pd.Series(dtype=str)
             t_code = clean_code(t_code_valid.iloc[0]) if not t_code_valid.empty else ""
             
@@ -157,9 +157,20 @@ if uploaded_file is not None:
             if t: t_code_totals[t] = t_code_totals.get(t, 0) + 1
             
         t_code_current = {}
-        output_rows = []
         
-        for p in unique_patterns:
+        output_rows = []
+        row_types = [] # 行の色分け用に「何の行か」を記憶するリスト
+        
+        # ★追加：項目名（ヘッダー）の定義
+        header_keys = [
+            '仕訳パターンコード', '仕訳パターン名', '取引先', 'プロジェクト', '部門', '仕訳日',
+            '借方_勘定科目_1', '借方_補助科目_1', '借方_税区分_1', '借方_金額_1', '借方_部門_1', '借方_プロジェクト_1',
+            '貸方_勘定科目_1', '貸方_補助科目_1', '貸方_税区分_1', '貸方_金額_1', '貸方_部門_1', '貸方_プロジェクト_1',
+            '共通_摘要_1'
+        ]
+        header_row = {k: k for k in header_keys}
+
+        for block_idx, p in enumerate(unique_patterns):
             t = p['t_code']
             if not t:
                 t_code_current['EMPTY'] = t_code_current.get('EMPTY', 0) + 1
@@ -172,6 +183,10 @@ if uploaded_file is not None:
                     pattern_code = t
             
             date_val = "請求日の当月月末" if p['is_month_end'] else "請求日の当日"
+            
+            # ★追加：各仕訳パターンの最初に「項目名」の行を挿入！
+            output_rows.append(header_row.copy())
+            row_types.append((block_idx, True)) # True = ヘッダー行
             
             for line in p['lines']:
                 row_1 = {
@@ -218,15 +233,23 @@ if uploaded_file is not None:
                     row_2['貸方_金額_1'] = line['kashi_money_val']
                     
                 output_rows.extend([row_1, row_2, row_3])
+                row_types.extend([(block_idx, False), (block_idx, False), (block_idx, False)]) # False = データ行
             
         final_df = pd.DataFrame(output_rows)
         
         output = io.BytesIO()
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
-            final_df.to_excel(writer, index=False)
+            # ★変更：プログラム側で完全に制御するため、pandasの自動ヘッダーをオフにする
+            final_df.to_excel(writer, index=False, header=False)
             
             worksheet = writer.sheets['Sheet1']
-            color_fill = PatternFill(start_color='E6EDF5', end_color='E6EDF5', fill_type='solid')
+            
+            # ★色とフォントの定義
+            color_fill = PatternFill(start_color='E6EDF5', end_color='E6EDF5', fill_type='solid') # データ用の薄い青
+            header_fill = PatternFill(start_color='005B3D', end_color='005B3D', fill_type='solid') # ヘッダー用の濃い緑
+            header_font = Font(color='FFFFFF', bold=True) # ヘッダー用の白・太字
+            normal_font = Font(color='000000', bold=False) # データ用の黒・標準
+            
             thin_border = Border(
                 left=Side(style='thin', color='000000'),
                 right=Side(style='thin', color='000000'),
@@ -234,18 +257,22 @@ if uploaded_file is not None:
                 bottom=Side(style='thin', color='000000')
             )
             
-            for col_idx in range(1, len(final_df.columns) + 1):
-                worksheet.cell(row=1, column=col_idx).border = thin_border
-            
-            for row_idx in range(2, len(final_df) + 2):
-                block_idx = (row_idx - 2) // 3
-                is_colored = (block_idx % 2 != 0)
-                
+            # ★色と罫線を適用するループ
+            for row_idx_0, (block_idx, is_header) in enumerate(row_types):
+                excel_row = row_idx_0 + 1
                 for col_idx in range(1, len(final_df.columns) + 1):
-                    cell = worksheet.cell(row=row_idx, column=col_idx)
+                    cell = worksheet.cell(row=excel_row, column=col_idx)
                     cell.border = thin_border
-                    if is_colored:
-                        cell.fill = color_fill
+                    
+                    # 項目名の行なら緑＋白文字
+                    if is_header:
+                        cell.fill = header_fill
+                        cell.font = header_font
+                    # データ行なら奇数ブロックのみ青背景
+                    else:
+                        cell.font = normal_font
+                        if block_idx % 2 != 0:
+                            cell.fill = color_fill
 
         output.seek(0)
         
