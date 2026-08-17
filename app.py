@@ -3,7 +3,8 @@ import pandas as pd
 import re
 import traceback
 import io
-from openpyxl.styles import PatternFill  # ★色を塗るためのパーツを追加
+# ★色と罫線を扱うパーツを読み込みます
+from openpyxl.styles import PatternFill, Border, Side
 
 st.set_page_config(page_title="仕訳フォーマット自動変換", layout="wide")
 st.title("📄 楽楽請求 仕訳フォーマット自動変換ツール")
@@ -175,11 +176,12 @@ if uploaded_file is not None:
                     row_2[k] = ""
                     row_3[k] = ""
                     
+                # ★修正箇所：B列（仕訳パターン名）に設定値を入れる
                 row_2['仕訳パターンコード'] = '仕訳の作成方法'
-                row_2['プロジェクト'] = '請求金額(源泉徴収税額控除前)から作成する'
+                row_2['仕訳パターン名'] = '請求金額(源泉徴収税額控除前)から作成する'
                 
                 row_3['仕訳パターンコード'] = '金額の設定方法'
-                row_3['プロジェクト'] = '金額を直接入力する'
+                row_3['仕訳パターン名'] = '金額を直接入力する'
                 
                 row_1['借方_勘定科目_1'] = line['kari_kamoku']
                 row_1['借方_補助科目_1'] = line['kari_hojo']
@@ -212,19 +214,37 @@ if uploaded_file is not None:
         with pd.ExcelWriter(output, engine='openpyxl') as writer:
             final_df.to_excel(writer, index=False)
             
-            # ★ ここから下で、3行ごとに交互に色を塗っています！
             worksheet = writer.sheets['Sheet1']
-            # 薄いグレーの背景色を用意
-            gray_fill = PatternFill(start_color='F2F2F2', end_color='F2F2F2', fill_type='solid')
             
-            # データの行（2行目）から最後までループ
-            # (row_idx - 2) // 3 の計算で、0,0,0, 1,1,1, 2,2,2... というブロック番号を作ります
+            # ★修正箇所：少し濃いブルーグレーの色に変更
+            color_fill = PatternFill(start_color='E6EDF5', end_color='E6EDF5', fill_type='solid')
+            
+            # ★追加箇所：細い黒線の設定
+            thin_border = Border(
+                left=Side(style='thin', color='000000'),
+                right=Side(style='thin', color='000000'),
+                top=Side(style='thin', color='000000'),
+                bottom=Side(style='thin', color='000000')
+            )
+            
+            # ヘッダー（1行目）に罫線を引く
+            for col_idx in range(1, len(final_df.columns) + 1):
+                worksheet.cell(row=1, column=col_idx).border = thin_border
+            
+            # データの行（2行目以降）に色塗りと罫線を適用
             for row_idx in range(2, len(final_df) + 2):
                 block_idx = (row_idx - 2) // 3
-                # ブロック番号が奇数（1, 3, 5...）のときだけ色を塗る（＝交互になる）
-                if block_idx % 2 != 0:
-                    for col_idx in range(1, len(final_df.columns) + 1):
-                        worksheet.cell(row=row_idx, column=col_idx).fill = gray_fill
+                is_colored = (block_idx % 2 != 0)
+                
+                for col_idx in range(1, len(final_df.columns) + 1):
+                    cell = worksheet.cell(row=row_idx, column=col_idx)
+                    
+                    # 罫線を引く
+                    cell.border = thin_border
+                    
+                    # 奇数ブロックなら色を塗る
+                    if is_colored:
+                        cell.fill = color_fill
 
         output.seek(0)
         
