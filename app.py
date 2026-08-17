@@ -43,6 +43,7 @@ if uploaded_file is not None:
         if v == 'nan': return ""
         return v
 
+    col_date = find_col(['日付', '伝票日付', '仕訳日'])
     col_denpyo = find_col(['伝票', 'No', '番号'])
     col_kari_money = find_col(['本体金額', '借方金額', '借金額', '金額(借)', '金額'])
     col_tekiyo = find_col(['摘要', '詳細', 'メモ'])
@@ -82,7 +83,15 @@ if uploaded_file is not None:
             
             t_code = clean_code(first_row[col_torihikisaki_code]) if col_torihikisaki_code else ""
             t_name = str(first_row[col_torihikisaki_name]).replace('nan', '不明').strip() if col_torihikisaki_name else "不明"
-            project_val = clean_code(first_row[col_kari_project_code]) if col_kari_project_code else ""
+            
+            # 仕訳日（月末判定）の処理
+            is_month_end = True
+            if col_date:
+                dates = pd.to_datetime(group[col_date], errors='coerce')
+                if dates.isna().all() or not dates.dropna().dt.is_month_end.all():
+                    is_month_end = False
+            else:
+                is_month_end = False
 
             kari_kamoku_list = group[col_kari_kamoku_name].dropna().unique().tolist()
             if not kari_kamoku_list: kari_kamoku_list = ["科目不明"]
@@ -102,7 +111,7 @@ if uploaded_file is not None:
                     'kari_bumon': clean_code(row[col_kari_bumon_code]) if col_kari_bumon_code else "",
                     'kari_project': clean_code(row[col_kari_project_code]) if col_kari_project_code else "",
                     'kari_tax': clean_code(row[col_kari_tax]) if col_kari_tax else "",
-                    'money_val': clean_code(row[col_kari_money]) if col_kari_money else "",
+                    'kari_money_val': clean_code(row[col_kari_money]) if col_kari_money else "",
                     'kashi_kamoku': clean_code(row[col_kashi_kamoku_code]) if col_kashi_kamoku_code else "",
                     'kashi_hojo': clean_code(row[col_kashi_hojo_code]) if col_kashi_hojo_code else "",
                     'kashi_bumon': clean_code(row[col_kashi_bumon_code]) if col_kashi_bumon_code else "",
@@ -112,15 +121,22 @@ if uploaded_file is not None:
                     'tekiyo': replace_month(row[col_tekiyo]) if col_tekiyo else ""
                 })
                 
-            patterns.append({'name': pattern_name, 't_code': t_code, 'project': project_val, 'lines': lines})
+            patterns.append({
+                'name': pattern_name,
+                't_code': t_code,
+                'is_month_end': is_month_end,
+                'lines': lines
+            })
 
-        unique_patterns = []
-        seen = []
+        unique_patterns_dict = {}
         for p in patterns:
             sig = p['name'] + "".join([str(l['kari_kamoku'])+str(l['kashi_kamoku']) for l in p['lines']])
-            if sig not in seen:
-                seen.append(sig)
-                unique_patterns.append(p)
+            if sig not in unique_patterns_dict:
+                unique_patterns_dict[sig] = p
+            else:
+                unique_patterns_dict[sig]['is_month_end'] = unique_patterns_dict[sig]['is_month_end'] and p['is_month_end']
+        
+        unique_patterns = list(unique_patterns_dict.values())
 
         t_code_totals = {}
         for p in unique_patterns:
@@ -129,8 +145,6 @@ if uploaded_file is not None:
             
         t_code_current = {}
         output_rows = []
-        
-        max_lines = max((len(p['lines']) for p in unique_patterns), default=1)
         
         for p in unique_patterns:
             t = p['t_code']
@@ -144,68 +158,57 @@ if uploaded_file is not None:
                 else:
                     pattern_code = t
             
-            row_1 = {'仕訳パターンコード': pattern_code, '仕訳パターン名': p['name'], '取引先': p['t_code'], 'プロジェクト': p['project'], '部門': '', '仕訳日': ''}
-            row_2 = {'仕訳パターンコード': '仕訳の作成方法', '仕訳パターン名': '', '取引先': '', 'プロジェクト': '請求金額(源泉徴収税額控除前)から作成する', '部門': '', '仕訳日': ''}
-            row_3 = {'仕訳パターンコード': '金額の設定方法', '仕訳パターン名': '', '取引先': '', 'プロジェクト': '金額を直接入力する', '部門': '', '仕訳日': ''}
+            date_val = "請求日の当月月末" if p['is_month_end'] else "請求日の当日"
             
-            for j in range(max_lines):
-                suffix = f"_{j+1}"
+            # 複数行（複合仕訳）の場合は、列を増やすのではなく「3行セット」を縦に繰り返し追加する
+            for line in p['lines']:
+                row_1 = {
+                    '仕訳パターンコード': pattern_code, '仕訳パターン名': p['name'], '取引先': p['t_code'], 'プロジェクト': '', '部門': '', '仕訳日': date_val,
+                    '借方_勘定科目_1': '', '借方_補助科目_1': '', '借方_税区分_1': '', '借方_金額_1': '', '借方_部門_1': '', '借方_プロジェクト_1': '',
+                    '貸方_勘定科目_1': '', '貸方_補助科目_1': '', '貸方_税区分_1': '', '貸方_金額_1': '', '貸方_部門_1': '', '貸方_プロジェクト_1': '',
+                    '共通_摘要_1': ''
+                }
                 
-                if j < len(p['lines']):
-                    line = p['lines'][j]
-                    row_1[f'借方_勘定科目{suffix}'] = line['kari_kamoku']
-                    row_1[f'借方_補助科目{suffix}'] = line['kari_hojo']
-                    row_1[f'借方_税区分{suffix}'] = line['kari_tax']
-                    
-                    # ★修正箇所：1行目に「固定で金額を入力」、2行目に「実際の金額」をセット！
-                    if len(p['lines']) == 1:
-                        row_1[f'借方_金額{suffix}'] = "差額を自動入力"
-                        row_2[f'借方_金額{suffix}'] = ""
-                    else:
-                        row_1[f'借方_金額{suffix}'] = "固定で金額を入力"
-                        row_2[f'借方_金額{suffix}'] = line['money_val']
-                    row_3[f'借方_金額{suffix}'] = ""
-                        
-                    row_1[f'借方_部門{suffix}'] = line['kari_bumon']
-                    row_1[f'借方_プロジェクト{suffix}'] = line['kari_project']
-                    
-                    row_1[f'貸方_勘定科目{suffix}'] = line['kashi_kamoku']
-                    row_1[f'貸方_補助科目{suffix}'] = line['kashi_hojo']
-                    row_1[f'貸方_税区分{suffix}'] = line['kashi_tax']
-                    row_1[f'貸方_金額{suffix}'] = line['kashi_money_val']
-                    row_2[f'貸方_金額{suffix}'] = ""
-                    row_3[f'貸方_金額{suffix}'] = ""
-                    row_1[f'貸方_部門{suffix}'] = line['kashi_bumon']
-                    row_1[f'貸方_プロジェクト{suffix}'] = line['kashi_project']
-                    
-                    row_1[f'共通_摘要{suffix}'] = line['tekiyo']
-                    
-                else:
-                    row_1[f'借方_勘定科目{suffix}'] = ""
-                    row_1[f'借方_補助科目{suffix}'] = ""
-                    row_1[f'借方_税区分{suffix}'] = ""
-                    row_1[f'借方_金額{suffix}'] = ""
-                    row_2[f'借方_金額{suffix}'] = ""
-                    row_3[f'借方_金額{suffix}'] = ""
-                    row_1[f'借方_部門{suffix}'] = ""
-                    row_1[f'借方_プロジェクト{suffix}'] = ""
-                    row_1[f'貸方_勘定科目{suffix}'] = ""
-                    row_1[f'貸方_補助科目{suffix}'] = ""
-                    row_1[f'貸方_税区分{suffix}'] = ""
-                    row_1[f'貸方_金額{suffix}'] = ""
-                    row_2[f'貸方_金額{suffix}'] = ""
-                    row_3[f'貸方_金額{suffix}'] = ""
-                    row_1[f'貸方_部門{suffix}'] = ""
-                    row_1[f'貸方_プロジェクト{suffix}'] = ""
-                    row_1[f'共通_摘要{suffix}'] = ""
-                    
-                # 他の行の空欄パディング
-                for k in [f'借方_勘定科目{suffix}', f'借方_補助科目{suffix}', f'借方_税区分{suffix}', f'借方_部門{suffix}', f'借方_プロジェクト{suffix}', 
-                          f'貸方_勘定科目{suffix}', f'貸方_補助科目{suffix}', f'貸方_税区分{suffix}', f'貸方_部門{suffix}', f'貸方_プロジェクト{suffix}', f'共通_摘要{suffix}']:
+                row_2 = row_1.copy()
+                row_3 = row_1.copy()
+                
+                # row_2, row_3 を空にする
+                for k in row_2.keys():
                     row_2[k] = ""
                     row_3[k] = ""
                     
-            output_rows.extend([row_1, row_2, row_3])
+                row_2['仕訳パターンコード'] = '仕訳の作成方法'
+                row_2['プロジェクト'] = '請求金額(源泉徴収税額控除前)から作成する'
+                
+                row_3['仕訳パターンコード'] = '金額の設定方法'
+                row_3['プロジェクト'] = '金額を直接入力する'
+                
+                # プロジェクトはD列ではなく明細行のプロジェクト列に配置
+                row_1['借方_勘定科目_1'] = line['kari_kamoku']
+                row_1['借方_補助科目_1'] = line['kari_hojo']
+                row_1['借方_税区分_1'] = line['kari_tax']
+                row_1['借方_部門_1'] = line['kari_bumon']
+                row_1['借方_プロジェクト_1'] = line['kari_project']
+                
+                row_1['貸方_勘定科目_1'] = line['kashi_kamoku']
+                row_1['貸方_補助科目_1'] = line['kashi_hojo']
+                row_1['貸方_税区分_1'] = line['kashi_tax']
+                row_1['貸方_部門_1'] = line['kashi_bumon']
+                row_1['貸方_プロジェクト_1'] = line['kashi_project']
+                
+                row_1['共通_摘要_1'] = line['tekiyo']
+                
+                # 借方・貸方の金額設定
+                if len(p['lines']) == 1:
+                    row_1['借方_金額_1'] = "差額を自動入力"
+                    row_1['貸方_金額_1'] = "差額を自動入力"
+                else:
+                    row_1['借方_金額_1'] = "固定で金額を入力"
+                    row_1['貸方_金額_1'] = "固定で金額を入力"
+                    row_2['借方_金額_1'] = line['kari_money_val']
+                    row_2['貸方_金額_1'] = line['kashi_money_val']
+                    
+                output_rows.extend([row_1, row_2, row_3])
             
         final_df = pd.DataFrame(output_rows)
         
@@ -225,5 +228,3 @@ if uploaded_file is not None:
     except Exception as e:
         st.error("【エラー】変換処理中に問題が発生しました。")
         st.text(traceback.format_exc())
-
-
