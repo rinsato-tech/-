@@ -30,11 +30,9 @@ if uploaded_file is not None:
         st.stop()
 
     def find_col(keywords):
-        # まずは完全一致を探す
         for k in keywords:
             for col in df.columns:
                 if k == str(col): return col
-        # なければ部分一致を探す
         for k in keywords:
             for col in df.columns:
                 if k in str(col): return col
@@ -47,7 +45,6 @@ if uploaded_file is not None:
         if v == 'nan': return ""
         return v
 
-    # ★辞書（検索キーワード）を大幅に強化しました！
     col_date = find_col(['日付', '伝票日付', '仕訳日'])
     col_denpyo = find_col(['伝票', '伝番', 'No', '番号'])
     col_kari_money = find_col(['本体金額', '借方金額／貸方金額', '借方金額', '借金額', '金額(借)', '金額'])
@@ -69,14 +66,13 @@ if uploaded_file is not None:
     col_kashi_project_code = find_col(['貸方プロジェクトコード'])
     col_kashi_tax = find_col(['貸方消費税区分コード', '貸方消費税', '貸方税区分'])
     
-    # 貸方金額がないソフト（Book1.csvなど）の場合は、借方金額の列を流用する
     col_kashi_money = find_col(['本体金額.1', '貸方金額', '貸金額', '金額(貸)'])
     if not col_kashi_money:
         col_kashi_money = col_kari_money 
 
     if not col_denpyo or not col_kari_kamoku_name:
         st.error(f"【エラー】必須となる「伝票番号」または「借方科目」の列が見つかりません。")
-        st.write("▼現在のCSVの列名一覧（ここからキーワードを登録します）")
+        st.write("▼現在のCSVの列名一覧")
         st.write(list(df.columns))
         st.stop()
 
@@ -97,9 +93,7 @@ if uploaded_file is not None:
             
             is_month_end = True
             if col_date:
-                # *マークなどが付いている日付を綺麗にしてから判定
                 clean_dates = group[col_date].astype(str).str.replace('*', '').str.strip()
-                # '6.30' などの表記を '2026/06/30' のように無理やり解釈できるか試す
                 dates = pd.to_datetime(clean_dates, errors='coerce', format='%m.%d')
                 if dates.isna().all():
                     dates = pd.to_datetime(clean_dates, errors='coerce')
@@ -146,7 +140,10 @@ if uploaded_file is not None:
 
         unique_patterns_dict = {}
         for p in patterns:
-            sig = p['name'] + "".join([str(l['kari_kamoku'])+str(l['kashi_kamoku']) for l in p['lines']])
+            # ★修正箇所：同じ仕訳かどうかの判定基準（sig）の先頭に、取引先コードを追加しました！
+            # これにより、取引先コードが違えば完全に別パターンとして扱われます。
+            sig = str(p['t_code']) + "_" + p['name'] + "".join([str(l['kari_kamoku'])+str(l['kashi_kamoku']) for l in p['lines']])
+            
             if sig not in unique_patterns_dict:
                 unique_patterns_dict[sig] = p
             else:
