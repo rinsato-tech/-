@@ -30,10 +30,10 @@ if uploaded_file is not None:
         st.stop()
 
     def find_col(keywords):
+        # ★修正：キーワードごとに「完全一致→部分一致」を探し、見つかれば即決定する（優先度順）
         for k in keywords:
             for col in df.columns:
                 if k == str(col): return col
-        for k in keywords:
             for col in df.columns:
                 if k in str(col): return col
         return None
@@ -45,7 +45,7 @@ if uploaded_file is not None:
         if v == 'nan': return ""
         return v
 
-    col_date = find_col(['日付', '伝票日付', '仕訳日'])
+    col_date = find_col(['仕訳日', '伝票日付', '日付']) # 優先度を調整
     col_denpyo = find_col(['伝票', '伝番', 'No', '番号'])
     col_kari_money = find_col(['本体金額', '借方金額／貸方金額', '借方金額', '借金額', '金額(借)', '金額'])
     col_tekiyo = find_col(['元帳摘要', '摘要', '詳細', 'メモ'])
@@ -86,11 +86,14 @@ if uploaded_file is not None:
         patterns = []
         
         for denpyo, group in grouped:
-            first_row = group.iloc[0]
             
-            t_code = clean_code(first_row[col_torihikisaki_code]) if col_torihikisaki_code else ""
-            t_name = str(first_row[col_torihikisaki_name]).replace('nan', '不明').strip() if col_torihikisaki_name else "不明"
+            # ★修正：1行目だけでなく、グループ内の「空欄ではないデータ」を優先して取得する
+            t_code_valid = group[col_torihikisaki_code].dropna() if col_torihikisaki_code else pd.Series(dtype=str)
+            t_code = clean_code(t_code_valid.iloc[0]) if not t_code_valid.empty else ""
             
+            t_name_valid = group[col_torihikisaki_name].dropna() if col_torihikisaki_name else pd.Series(dtype=str)
+            t_name = str(t_name_valid.iloc[0]).replace('nan', '不明').strip() if not t_name_valid.empty else "不明"
+
             is_month_end = True
             if col_date:
                 clean_dates = group[col_date].astype(str).str.replace('*', '').str.strip()
@@ -140,10 +143,7 @@ if uploaded_file is not None:
 
         unique_patterns_dict = {}
         for p in patterns:
-            # ★修正箇所：同じ仕訳かどうかの判定基準（sig）の先頭に、取引先コードを追加しました！
-            # これにより、取引先コードが違えば完全に別パターンとして扱われます。
             sig = str(p['t_code']) + "_" + p['name'] + "".join([str(l['kari_kamoku'])+str(l['kashi_kamoku']) for l in p['lines']])
-            
             if sig not in unique_patterns_dict:
                 unique_patterns_dict[sig] = p
             else:
