@@ -3,7 +3,6 @@ import pandas as pd
 import re
 import traceback
 import io
-# ★色と罫線を扱うパーツを読み込みます
 from openpyxl.styles import PatternFill, Border, Side
 
 st.set_page_config(page_title="仕訳フォーマット自動変換", layout="wide")
@@ -31,9 +30,12 @@ if uploaded_file is not None:
         st.stop()
 
     def find_col(keywords):
+        # まずは完全一致を探す
         for k in keywords:
             for col in df.columns:
                 if k == str(col): return col
+        # なければ部分一致を探す
+        for k in keywords:
             for col in df.columns:
                 if k in str(col): return col
         return None
@@ -45,30 +47,37 @@ if uploaded_file is not None:
         if v == 'nan': return ""
         return v
 
+    # ★辞書（検索キーワード）を大幅に強化しました！
     col_date = find_col(['日付', '伝票日付', '仕訳日'])
-    col_denpyo = find_col(['伝票', 'No', '番号'])
-    col_kari_money = find_col(['本体金額', '借方金額', '借金額', '金額(借)', '金額'])
-    col_tekiyo = find_col(['摘要', '詳細', 'メモ'])
+    col_denpyo = find_col(['伝票', '伝番', 'No', '番号'])
+    col_kari_money = find_col(['本体金額', '借方金額／貸方金額', '借方金額', '借金額', '金額(借)', '金額'])
+    col_tekiyo = find_col(['元帳摘要', '摘要', '詳細', 'メモ'])
     
-    col_kari_kamoku_name = find_col(['借方勘定科目名', '借方科目', '借科目', '勘定科目(借)'])
+    col_kari_kamoku_name = find_col(['借方勘定科目名', '借方科目名', '借方科目', '借科目', '勘定科目(借)'])
     col_torihikisaki_name = find_col(['取引先名', '貸方補助科目名', '貸方補助', '補助科目名'])
 
     col_torihikisaki_code = find_col(['取引先コード'])
     col_kari_kamoku_code = find_col(['借方勘定科目コード', '借方科目コード'])
-    col_kari_hojo_code = find_col(['借方補助科目コード', '借方補助コード'])
-    col_kari_bumon_code = find_col(['借方部門コード'])
-    col_kari_project_code = find_col(['借方プロジェクトコード', 'プロジェクトコード'])
-    col_kari_tax = find_col(['借方消費税区分コード', '借方消費税', '税区分', '税', '消費税'])
+    col_kari_hojo_code = find_col(['借方補助科目コード', '借方補助コード', '借方補助'])
+    col_kari_bumon_code = find_col(['借方部門コード', '部門'])
+    col_kari_project_code = find_col(['借方プロジェクトコード', 'プロジェクトコード', 'プロジェクト'])
+    col_kari_tax = find_col(['借方消費税区分コード', '借方消費税', '借方税区分', '税区分', '税', '消費税'])
     
     col_kashi_kamoku_code = find_col(['貸方勘定科目コード', '貸方科目コード'])
-    col_kashi_hojo_code = find_col(['貸方補助科目コード', '貸方補助コード'])
+    col_kashi_hojo_code = find_col(['貸方補助科目コード', '貸方補助コード', '貸方補助'])
     col_kashi_bumon_code = find_col(['貸方部門コード'])
     col_kashi_project_code = find_col(['貸方プロジェクトコード'])
-    col_kashi_tax = find_col(['貸方消費税区分コード', '貸方税区分', '貸方消費税'])
-    col_kashi_money = find_col(['本体金額.1', '貸方金額', '貸金額', '金額(貸)']) 
+    col_kashi_tax = find_col(['貸方消費税区分コード', '貸方消費税', '貸方税区分'])
+    
+    # 貸方金額がないソフト（Book1.csvなど）の場合は、借方金額の列を流用する
+    col_kashi_money = find_col(['本体金額.1', '貸方金額', '貸金額', '金額(貸)'])
+    if not col_kashi_money:
+        col_kashi_money = col_kari_money 
 
     if not col_denpyo or not col_kari_kamoku_name:
-        st.error("【エラー】伝票番号、または借方科目の列が見つかりません。")
+        st.error(f"【エラー】必須となる「伝票番号」または「借方科目」の列が見つかりません。")
+        st.write("▼現在のCSVの列名一覧（ここからキーワードを登録します）")
+        st.write(list(df.columns))
         st.stop()
 
     def replace_month(text):
@@ -88,7 +97,13 @@ if uploaded_file is not None:
             
             is_month_end = True
             if col_date:
-                dates = pd.to_datetime(group[col_date], errors='coerce')
+                # *マークなどが付いている日付を綺麗にしてから判定
+                clean_dates = group[col_date].astype(str).str.replace('*', '').str.strip()
+                # '6.30' などの表記を '2026/06/30' のように無理やり解釈できるか試す
+                dates = pd.to_datetime(clean_dates, errors='coerce', format='%m.%d')
+                if dates.isna().all():
+                    dates = pd.to_datetime(clean_dates, errors='coerce')
+                
                 if dates.isna().all() or not dates.dropna().dt.is_month_end.all():
                     is_month_end = False
             else:
@@ -176,7 +191,6 @@ if uploaded_file is not None:
                     row_2[k] = ""
                     row_3[k] = ""
                     
-                # ★修正箇所：B列（仕訳パターン名）に設定値を入れる
                 row_2['仕訳パターンコード'] = '仕訳の作成方法'
                 row_2['仕訳パターン名'] = '請求金額(源泉徴収税額控除前)から作成する'
                 
@@ -215,11 +229,7 @@ if uploaded_file is not None:
             final_df.to_excel(writer, index=False)
             
             worksheet = writer.sheets['Sheet1']
-            
-            # ★修正箇所：少し濃いブルーグレーの色に変更
             color_fill = PatternFill(start_color='E6EDF5', end_color='E6EDF5', fill_type='solid')
-            
-            # ★追加箇所：細い黒線の設定
             thin_border = Border(
                 left=Side(style='thin', color='000000'),
                 right=Side(style='thin', color='000000'),
@@ -227,22 +237,16 @@ if uploaded_file is not None:
                 bottom=Side(style='thin', color='000000')
             )
             
-            # ヘッダー（1行目）に罫線を引く
             for col_idx in range(1, len(final_df.columns) + 1):
                 worksheet.cell(row=1, column=col_idx).border = thin_border
             
-            # データの行（2行目以降）に色塗りと罫線を適用
             for row_idx in range(2, len(final_df) + 2):
                 block_idx = (row_idx - 2) // 3
                 is_colored = (block_idx % 2 != 0)
                 
                 for col_idx in range(1, len(final_df.columns) + 1):
                     cell = worksheet.cell(row=row_idx, column=col_idx)
-                    
-                    # 罫線を引く
                     cell.border = thin_border
-                    
-                    # 奇数ブロックなら色を塗る
                     if is_colored:
                         cell.fill = color_fill
 
